@@ -113,15 +113,6 @@ class BeatSyncConfig(BasePipelineConfig):
         json_schema_extra=ui_field_config(order=47, label="Contrast Amount"),
     )
 
-    mask_pulse_enabled: bool = Field(
-        default=False,
-        description="Pulse VACE mask with beat for more dramatic generation changes.",
-        json_schema_extra=ui_field_config(order=48, label="Mask Pulse"),
-    )
-    mask_pulse_amount: float = Field(
-        default=0.5,
-        ge=0.0,
-        le=1.0,
-        description="Depth of VACE mask pulse.",
-        json_schema_extra=ui_field_config(order=49, label="Mask Pulse Amount"),
-    )
+    # NOTE: Mask pulse removed — preprocessors are called per-frame so
+    # they can't construct the full-chunk vace_input_masks tensor.
+    # Mask modulation would need to live in the main pipeline.

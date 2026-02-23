@@ -1,9 +1,9 @@
 """Beat Sync preprocessor pipeline.
 
 Chains after a conditioning preprocessor (depth, edge, flow) and
-modulates the conditioning frames based on BPM.  The modulated frames
-are returned both as canvas video *and* as VACE conditioning so the
-generated output inherits the beat reactivity.
+modulates the conditioning frames based on BPM.  Returns modulated
+video frames — the pipeline processor handles collecting frames into
+chunks and constructing VACE inputs.
 """
 
 from __future__ import annotations
@@ -22,7 +22,6 @@ from .effects import (
     apply_contrast,
     apply_intensity,
     apply_invert,
-    compute_mask_value,
 )
 from .schema import BeatSyncConfig
 from .tempo import TapTempo
@@ -39,8 +38,8 @@ class BeatSyncPipeline(Pipeline):
 
     Receives conditioning frames (depth maps, edges, flow, etc.) from
     an upstream preprocessor, modulates them per-frame according to BPM
-    and beat curve, and returns both modulated canvas video and
-    VACE-formatted conditioning outputs.
+    and beat curve, and returns the modulated video.  The pipeline
+    processor collects frames into chunks and builds VACE inputs.
     """
 
     @classmethod
@@ -98,9 +97,6 @@ class BeatSyncPipeline(Pipeline):
         invert_amt = kwargs.get("invert_amount", 0.3)
         contrast_on = kwargs.get("contrast_enabled", False)
         contrast_amt = kwargs.get("contrast_amount", 0.5)
-        mask_on = kwargs.get("mask_pulse_enabled", False)
-        mask_amt = kwargs.get("mask_pulse_amount", 0.5)
-
         # --- Tap tempo ------------------------------------------------------
         self.tap_tempo.update(tap, now)
         effective_bpm = self.tap_tempo.get_bpm(bpm, now)
@@ -135,23 +131,6 @@ class BeatSyncPipeline(Pipeline):
 
         modulated = modulated.clamp(0, 1)
 
-        # --- Build VACE conditioning output ---------------------------------
-        # vace_input_frames: list of [1, H, W, C] float32 in [0, 255]
-        # When the downstream PreprocessVideoBlock sees a list it runs
-        # preprocess_chunk() which stacks to BCTHW and normalises to [-1, 1].
-        vace_frames = [(modulated[i : i + 1] * 255.0) for i in range(T)]
-
-        # vace_input_masks: [1, 1, T, H, W] float32
-        # 1.0 = generate from conditioning, 0.0 = preserve previous
-        if mask_on and mask_amt > 0:
-            mask_vals = [compute_mask_value(mask_amt, bv.item()) for bv in beat_vals]
-        else:
-            mask_vals = [1.0] * T
-        masks = torch.tensor(mask_vals, device=self.device, dtype=torch.float32)
-        masks = masks.view(1, 1, T, 1, 1).expand(1, 1, T, H, W)
-
-        return {
-            "video": modulated,  # [T, H, W, C] float32 [0, 1] — canvas display
-            "vace_input_frames": vace_frames,  # list of [1, H, W, C] — VACE conditioning
-            "vace_input_masks": masks,  # [1, 1, T, H, W] — VACE masks
-        }
+        # Return modulated video only — the pipeline processor collects
+        # frames into chunks and builds vace_input_frames / vace_input_masks.
+        return {"video": modulated}  # [T, H, W, C] float32 [0, 1]

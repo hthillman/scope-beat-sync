@@ -35,9 +35,9 @@ class BeatSyncConfig(BasePipelineConfig):
         json_schema_extra=ui_field_config(order=10, label="BPM"),
     )
 
-    tap: bool = Field(
-        default=False,
-        description="Flip this toggle on each beat to set BPM. Each toggle = one tap. After 2+ taps, BPM auto-updates. Resets after 10s of inactivity.",
+    tap_count: int = Field(
+        default=0,
+        description="Click + on each beat to set BPM. After 2+ taps, BPM auto-updates from tap intervals. Resets after 10s.",
         json_schema_extra=ui_field_config(order=11, label="Tap Tempo"),
     )
 

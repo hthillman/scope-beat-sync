@@ -80,9 +80,9 @@ class BeatSyncPipeline(Pipeline):
             frames = frames / 255.0
 
         # --- Tap tempo --------------------------------------------------------
-        tap = kwargs.get("tap", False)
+        tap_count = int(kwargs.get("tap_count", 0))
         bpm = max(1.0, min(float(kwargs.get("bpm", 120.0)), 999.0))
-        self.tap_tempo.update(tap, now)
+        self.tap_tempo.update(tap_count, now)
         effective_bpm = self.tap_tempo.get_bpm(bpm, now)
 
         # --- Forward params + unmodified frames -------------------------------

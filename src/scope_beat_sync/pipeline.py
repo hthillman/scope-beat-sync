@@ -29,9 +29,6 @@ from .tempo import TapTempo
 if TYPE_CHECKING:
     from scope.core.pipelines.base_schema import BasePipelineConfig
 
-# Assumed output FPS for per-frame time estimation
-_FPS = 20.0
-
 
 class BeatSyncPipeline(Pipeline):
     """Beat-reactive conditioning preprocessor.
@@ -54,9 +51,59 @@ class BeatSyncPipeline(Pipeline):
         )
         self.tap_tempo = TapTempo(max_taps=8, timeout=10.0)
 
+        # --- Phase tracking state ---
+        self._phase: float = 0.0
+        self._last_time: float | None = None
+        self._frame_counter: int = 0
+
     def prepare(self, **kwargs) -> Requirements:
         """Accept any number of input frames from the upstream preprocessor."""
         return Requirements(input_size=1)
+
+    # ------------------------------------------------------------------
+    # Phase computation
+    # ------------------------------------------------------------------
+
+    def _advance_phase(
+        self,
+        now: float,
+        effective_bpm: float,
+        phase_offset: float,
+        timing_mode: str,
+        target_fps: float,
+    ) -> float:
+        """Advance the internal phase and return the current beat phase [0, 1).
+
+        **accumulator** — phase += measured_dt * bpm / 60.  Adapts to the
+        actual preprocessor call rate instead of assuming a fixed FPS.
+
+        **counter** — phase is a pure function of frame count and target FPS.
+        Deterministic visual rhythm; perceived BPM scales with actual
+        output FPS relative to *target_fps*.
+        """
+        beat_period = 60.0 / max(effective_bpm, 1.0)
+
+        if timing_mode == "counter":
+            raw_phase = (self._frame_counter * effective_bpm) / (
+                60.0 * max(target_fps, 1.0)
+            )
+            phase = (raw_phase + phase_offset) % 1.0
+        else:
+            # accumulator (default)
+            if self._last_time is not None:
+                dt = now - self._last_time
+                # Clamp to avoid huge jumps from pauses / stalls
+                dt = min(dt, 0.5)
+                self._phase += dt / beat_period
+            phase = (self._phase + phase_offset) % 1.0
+
+        self._last_time = now
+        self._frame_counter += 1
+        return phase
+
+    # ------------------------------------------------------------------
+    # Main entry point
+    # ------------------------------------------------------------------
 
     def __call__(self, **kwargs) -> dict:
         now = time.time()
@@ -66,10 +113,9 @@ class BeatSyncPipeline(Pipeline):
         if video is None:
             raise ValueError("BeatSyncPipeline requires video input")
 
-        # Normalise frame sizes to handle resolution changes
         if isinstance(video, list):
             video = normalize_frame_sizes(video)
-            frames = torch.stack([f.squeeze(0) for f in video], dim=0)  # [T, H, W, C]
+            frames = torch.stack([f.squeeze(0) for f in video], dim=0)
         elif isinstance(video, torch.Tensor):
             frames = video if video.dim() == 4 else video.unsqueeze(0)
         else:
@@ -77,7 +123,6 @@ class BeatSyncPipeline(Pipeline):
 
         frames = frames.to(device=self.device, dtype=torch.float32)
 
-        # If frames came in [0, 255] normalise to [0, 1]
         if frames.max() > 1.5:
             frames = frames / 255.0
 
@@ -88,6 +133,9 @@ class BeatSyncPipeline(Pipeline):
         tap = kwargs.get("tap", False)
         phase_offset = kwargs.get("beat_phase_offset", 0.0)
         curve_name = kwargs.get("beat_curve", "pulse")
+        timing_mode = kwargs.get("timing_mode", "accumulator")
+        target_fps = kwargs.get("target_fps", 15.0)
+        reset_phase = kwargs.get("reset_phase", False)
 
         intensity_on = kwargs.get("intensity_enabled", True)
         intensity_amt = kwargs.get("intensity_amount", 0.5)
@@ -97,21 +145,23 @@ class BeatSyncPipeline(Pipeline):
         invert_amt = kwargs.get("invert_amount", 0.3)
         contrast_on = kwargs.get("contrast_enabled", False)
         contrast_amt = kwargs.get("contrast_amount", 0.5)
+
+        # --- Phase reset ----------------------------------------------------
+        if reset_phase:
+            self._phase = 0.0
+            self._frame_counter = 0
+            self._last_time = None
+
         # --- Tap tempo ------------------------------------------------------
         self.tap_tempo.update(tap, now)
         effective_bpm = self.tap_tempo.get_bpm(bpm, now)
-        beat_period = 60.0 / max(effective_bpm, 1.0)
 
-        # --- Per-frame beat values ------------------------------------------
-        # A 12-frame chunk at 20 FPS spans 0.6s.  At 120 BPM (0.5s/beat)
-        # that's more than a full beat, so each frame needs its own phase.
-        beat_vals = torch.zeros(T, device=self.device)
-        for i in range(T):
-            frame_time = now - (T - 1 - i) * (1.0 / _FPS)
-            phase = ((frame_time / beat_period) + phase_offset) % 1.0
-            beat_vals[i] = get_curve_value(curve_name, phase)
-
-        # Broadcastable shape for per-frame element-wise ops: [T, 1, 1, 1]
+        # --- Compute beat value (T is always 1 with input_size=1) -----------
+        phase = self._advance_phase(
+            now, effective_bpm, phase_offset, timing_mode, target_fps
+        )
+        beat_val = get_curve_value(curve_name, phase)
+        beat_vals = torch.tensor([beat_val], device=self.device)
         beat_vals_4d = beat_vals.view(T, 1, 1, 1)
 
         # --- Apply effects --------------------------------------------------
@@ -133,4 +183,4 @@ class BeatSyncPipeline(Pipeline):
 
         # Return modulated video only — the pipeline processor collects
         # frames into chunks and builds vace_input_frames / vace_input_masks.
-        return {"video": modulated}  # [T, H, W, C] float32 [0, 1]
+        return {"video": modulated}

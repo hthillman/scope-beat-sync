@@ -51,6 +51,36 @@ class BeatSyncConfig(BasePipelineConfig):
         json_schema_extra=ui_field_config(order=12, label="Phase Offset"),
     )
 
+    # --- Timing ---
+
+    timing_mode: Literal["accumulator", "counter"] = Field(
+        default="accumulator",
+        description=(
+            "Phase timing strategy. "
+            "'accumulator' advances phase by measured wall-clock dt (adapts to actual rate). "
+            "'counter' uses a deterministic frame counter (best for standalone video)."
+        ),
+        json_schema_extra=ui_field_config(order=13, label="Timing Mode"),
+    )
+
+    target_fps: float = Field(
+        default=15.0,
+        ge=1.0,
+        le=60.0,
+        description=(
+            "Expected output FPS (counter mode only). "
+            "Perceived BPM = actual_output_fps * set_BPM / target_fps. "
+            "Set to your observed output FPS for accurate visual tempo."
+        ),
+        json_schema_extra=ui_field_config(order=14, label="Target FPS"),
+    )
+
+    reset_phase: bool = Field(
+        default=False,
+        description="Toggle to reset beat phase to zero. Flip on then off to trigger.",
+        json_schema_extra=ui_field_config(order=15, label="Reset Phase"),
+    )
+
     # --- Curve ---
 
     beat_curve: Literal["pulse", "sine", "square", "sawtooth", "triangle"] = Field(

@@ -53,12 +53,13 @@ class BeatSyncConfig(BasePipelineConfig):
 
     # --- Timing ---
 
-    timing_mode: Literal["accumulator", "counter"] = Field(
-        default="accumulator",
+    timing_mode: Literal["clock", "counter"] = Field(
+        default="clock",
         description=(
             "Phase timing strategy. "
-            "'accumulator' advances phase by measured wall-clock dt (adapts to actual rate). "
-            "'counter' uses a deterministic frame counter (best for standalone video)."
+            "'clock' snaps to wall-clock phase every chunk — stays locked to BPM, "
+            "never drifts (best for live VJ / audio sync). "
+            "'counter' uses a deterministic frame counter (smooth but not real-time locked)."
         ),
         json_schema_extra=ui_field_config(order=13, label="Timing Mode"),
     )

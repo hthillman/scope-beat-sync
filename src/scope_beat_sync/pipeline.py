@@ -3,8 +3,13 @@
 Chains after a conditioning preprocessor (depth, edge, flow) and
 modulates the conditioning frames based on BPM.  Uses input_size=12
 to match the main pipeline's chunk size so that beat-phase modulation
-is applied to the exact frames that will be used for VACE inference,
-avoiding phase disruption from downstream uniform subsampling.
+is applied to the exact frames that will be used for VACE inference.
+
+Cross-chunk timing: the default "clock" mode derives phase from wall
+time at every chunk boundary, so the visual never drifts from the
+beat even when inference speed varies.  The within-chunk phase spread
+uses an EMA of recent chunk durations for smooth frame-to-frame
+progression.
 """
 
 from __future__ import annotations
@@ -34,6 +39,9 @@ if TYPE_CHECKING:
 # modulation lands on the frames that actually reach inference.
 _CHUNK_SIZE = 12
 
+# EMA smoothing factor for chunk duration estimation (0–1, higher = more responsive)
+_EMA_ALPHA = 0.3
+
 
 class BeatSyncPipeline(Pipeline):
     """Beat-reactive conditioning preprocessor.
@@ -57,9 +65,9 @@ class BeatSyncPipeline(Pipeline):
         )
         self.tap_tempo = TapTempo(max_taps=8, timeout=10.0)
 
-        # --- Phase tracking state ---
-        self._phase: float = 0.0
+        # --- Timing state ---
         self._last_time: float | None = None
+        self._chunk_dt_ema: float | None = None  # smoothed chunk duration
         self._frame_counter: int = 0
 
     def prepare(self, **kwargs) -> Requirements:
@@ -81,38 +89,53 @@ class BeatSyncPipeline(Pipeline):
     ) -> list[float]:
         """Return a beat phase [0, 1) for each frame in the chunk.
 
-        **accumulator** — uses measured dt since last chunk to determine
-        how much beat time this chunk spans, then spreads it evenly
-        across *num_frames*.
+        **clock** (default) — phase is derived from wall time at each
+        chunk boundary, so the visual never accumulates drift.  The
+        within-chunk spread uses an EMA of recent chunk durations to
+        keep frame-to-frame progression smooth.
 
-        **counter** — deterministic: each frame advances the counter,
-        phase is a pure function of counter and target FPS.
+        **counter** — deterministic: phase is a pure function of frame
+        count and target FPS.  Smooth but not locked to real time.
         """
         beat_period = 60.0 / max(effective_bpm, 1.0)
-        phases: list[float] = []
 
         if timing_mode == "counter":
+            phases: list[float] = []
             for i in range(num_frames):
                 idx = self._frame_counter + i
                 raw = (idx * effective_bpm) / (60.0 * max(target_fps, 1.0))
                 phases.append((raw + phase_offset) % 1.0)
-        else:
-            # Accumulator (default)
-            if self._last_time is not None:
-                chunk_dt = min(now - self._last_time, 2.0)
+            self._last_time = now
+            self._frame_counter += num_frames
+            return phases
+
+        # --- Clock mode (default) -------------------------------------------
+
+        # 1. Snap start phase to wall clock — no drift, ever
+        start_phase = (now / beat_period) % 1.0
+
+        # 2. Estimate how long this chunk will play back for.
+        #    Use EMA of measured inter-chunk dt for smooth progression.
+        if self._last_time is not None:
+            raw_dt = now - self._last_time
+            raw_dt = max(min(raw_dt, 3.0), 0.01)  # clamp outliers
+
+            if self._chunk_dt_ema is None:
+                self._chunk_dt_ema = raw_dt
             else:
-                # First chunk: estimate from target FPS
-                chunk_dt = num_frames / max(target_fps, 1.0)
+                self._chunk_dt_ema += _EMA_ALPHA * (raw_dt - self._chunk_dt_ema)
+        else:
+            # First chunk: fall back to target FPS estimate
+            self._chunk_dt_ema = num_frames / max(target_fps, 1.0)
 
-            chunk_phase_span = chunk_dt / beat_period
-            start_phase = self._phase
+        chunk_phase_span = self._chunk_dt_ema / beat_period
 
-            for i in range(num_frames):
-                frac = i / max(num_frames - 1, 1)
-                p = start_phase + frac * chunk_phase_span
-                phases.append((p + phase_offset) % 1.0)
-
-            self._phase = start_phase + chunk_phase_span
+        # 3. Spread phase evenly across frames
+        phases = []
+        for i in range(num_frames):
+            frac = i / max(num_frames - 1, 1)
+            p = start_phase + frac * chunk_phase_span
+            phases.append((p + phase_offset) % 1.0)
 
         self._last_time = now
         self._frame_counter += num_frames
@@ -150,7 +173,7 @@ class BeatSyncPipeline(Pipeline):
         tap = kwargs.get("tap", False)
         phase_offset = kwargs.get("beat_phase_offset", 0.0)
         curve_name = kwargs.get("beat_curve", "pulse")
-        timing_mode = kwargs.get("timing_mode", "accumulator")
+        timing_mode = kwargs.get("timing_mode", "clock")
         target_fps = kwargs.get("target_fps", 15.0)
         reset_phase = kwargs.get("reset_phase", False)
 
@@ -165,7 +188,7 @@ class BeatSyncPipeline(Pipeline):
 
         # --- Phase reset ----------------------------------------------------
         if reset_phase:
-            self._phase = 0.0
+            self._chunk_dt_ema = None
             self._frame_counter = 0
             self._last_time = None
 

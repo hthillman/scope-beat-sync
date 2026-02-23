@@ -1,9 +1,10 @@
 """Beat Sync preprocessor pipeline.
 
 Chains after a conditioning preprocessor (depth, edge, flow) and
-modulates the conditioning frames based on BPM.  Returns modulated
-video frames — the pipeline processor handles collecting frames into
-chunks and constructing VACE inputs.
+modulates the conditioning frames based on BPM.  Uses input_size=12
+to match the main pipeline's chunk size so that beat-phase modulation
+is applied to the exact frames that will be used for VACE inference,
+avoiding phase disruption from downstream uniform subsampling.
 """
 
 from __future__ import annotations
@@ -29,14 +30,19 @@ from .tempo import TapTempo
 if TYPE_CHECKING:
     from scope.core.pipelines.base_schema import BasePipelineConfig
 
+# Match the main VACE pipeline chunk size so that our per-frame beat
+# modulation lands on the frames that actually reach inference.
+_CHUNK_SIZE = 12
+
 
 class BeatSyncPipeline(Pipeline):
     """Beat-reactive conditioning preprocessor.
 
-    Receives conditioning frames (depth maps, edges, flow, etc.) from
-    an upstream preprocessor, modulates them per-frame according to BPM
-    and beat curve, and returns the modulated video.  The pipeline
-    processor collects frames into chunks and builds VACE inputs.
+    Receives a chunk of conditioning frames (depth maps, edges, etc.)
+    from an upstream preprocessor, modulates each frame according to
+    its beat phase, and returns the modulated chunk.  Because
+    input_size matches the downstream VACE chunk size, the per-frame
+    beat pattern is preserved through to inference.
     """
 
     @classmethod
@@ -57,49 +63,60 @@ class BeatSyncPipeline(Pipeline):
         self._frame_counter: int = 0
 
     def prepare(self, **kwargs) -> Requirements:
-        """Accept any number of input frames from the upstream preprocessor."""
-        return Requirements(input_size=1)
+        """Request a full chunk so beat phasing survives subsampling."""
+        return Requirements(input_size=_CHUNK_SIZE)
 
     # ------------------------------------------------------------------
     # Phase computation
     # ------------------------------------------------------------------
 
-    def _advance_phase(
+    def _compute_chunk_phases(
         self,
         now: float,
+        num_frames: int,
         effective_bpm: float,
         phase_offset: float,
         timing_mode: str,
         target_fps: float,
-    ) -> float:
-        """Advance the internal phase and return the current beat phase [0, 1).
+    ) -> list[float]:
+        """Return a beat phase [0, 1) for each frame in the chunk.
 
-        **accumulator** — phase += measured_dt * bpm / 60.  Adapts to the
-        actual preprocessor call rate instead of assuming a fixed FPS.
+        **accumulator** — uses measured dt since last chunk to determine
+        how much beat time this chunk spans, then spreads it evenly
+        across *num_frames*.
 
-        **counter** — phase is a pure function of frame count and target FPS.
-        Deterministic visual rhythm; perceived BPM scales with actual
-        output FPS relative to *target_fps*.
+        **counter** — deterministic: each frame advances the counter,
+        phase is a pure function of counter and target FPS.
         """
         beat_period = 60.0 / max(effective_bpm, 1.0)
+        phases: list[float] = []
 
         if timing_mode == "counter":
-            raw_phase = (self._frame_counter * effective_bpm) / (
-                60.0 * max(target_fps, 1.0)
-            )
-            phase = (raw_phase + phase_offset) % 1.0
+            for i in range(num_frames):
+                idx = self._frame_counter + i
+                raw = (idx * effective_bpm) / (60.0 * max(target_fps, 1.0))
+                phases.append((raw + phase_offset) % 1.0)
         else:
-            # accumulator (default)
+            # Accumulator (default)
             if self._last_time is not None:
-                dt = now - self._last_time
-                # Clamp to avoid huge jumps from pauses / stalls
-                dt = min(dt, 0.5)
-                self._phase += dt / beat_period
-            phase = (self._phase + phase_offset) % 1.0
+                chunk_dt = min(now - self._last_time, 2.0)
+            else:
+                # First chunk: estimate from target FPS
+                chunk_dt = num_frames / max(target_fps, 1.0)
+
+            chunk_phase_span = chunk_dt / beat_period
+            start_phase = self._phase
+
+            for i in range(num_frames):
+                frac = i / max(num_frames - 1, 1)
+                p = start_phase + frac * chunk_phase_span
+                phases.append((p + phase_offset) % 1.0)
+
+            self._phase = start_phase + chunk_phase_span
 
         self._last_time = now
-        self._frame_counter += 1
-        return phase
+        self._frame_counter += num_frames
+        return phases
 
     # ------------------------------------------------------------------
     # Main entry point
@@ -156,12 +173,14 @@ class BeatSyncPipeline(Pipeline):
         self.tap_tempo.update(tap, now)
         effective_bpm = self.tap_tempo.get_bpm(bpm, now)
 
-        # --- Compute beat value (T is always 1 with input_size=1) -----------
-        phase = self._advance_phase(
-            now, effective_bpm, phase_offset, timing_mode, target_fps
+        # --- Per-frame beat values for the chunk ----------------------------
+        phases = self._compute_chunk_phases(
+            now, T, effective_bpm, phase_offset, timing_mode, target_fps
         )
-        beat_val = get_curve_value(curve_name, phase)
-        beat_vals = torch.tensor([beat_val], device=self.device)
+        beat_vals = torch.tensor(
+            [get_curve_value(curve_name, p) for p in phases],
+            device=self.device,
+        )
         beat_vals_4d = beat_vals.view(T, 1, 1, 1)
 
         # --- Apply effects --------------------------------------------------
@@ -181,6 +200,4 @@ class BeatSyncPipeline(Pipeline):
 
         modulated = modulated.clamp(0, 1)
 
-        # Return modulated video only — the pipeline processor collects
-        # frames into chunks and builds vace_input_frames / vace_input_masks.
         return {"video": modulated}

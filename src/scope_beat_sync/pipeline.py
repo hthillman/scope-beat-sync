@@ -74,6 +74,11 @@ class BeatSyncPipeline(Pipeline):
         else:
             raise TypeError(f"Unexpected video type: {type(video)}")
 
+        # Ensure float32 [0, 1] — pipeline_processor does `output * 255` on return
+        frames = frames.to(device=self.device, dtype=torch.float32)
+        if frames.max() > 1.5:
+            frames = frames / 255.0
+
         # --- Tap tempo --------------------------------------------------------
         tap = kwargs.get("tap", False)
         bpm = kwargs.get("bpm", 120.0)

@@ -31,15 +31,13 @@ class BeatSyncConfig(BasePipelineConfig):
 
     bpm: float = Field(
         default=120.0,
-        ge=30.0,
-        le=300.0,
-        description="Manual BPM. Overridden by tap tempo when active.",
+        description="Type a BPM value directly (e.g. 128, 140, 174).",
         json_schema_extra=ui_field_config(order=10, label="BPM"),
     )
 
     tap: bool = Field(
         default=False,
-        description="Toggle on each beat to set BPM via tap tempo. Each flip counts as one tap.",
+        description="Flip this toggle on each beat to set BPM. Each toggle = one tap. After 2+ taps, BPM auto-updates. Resets after 10s of inactivity.",
         json_schema_extra=ui_field_config(order=11, label="Tap Tempo"),
     )
 
@@ -98,7 +96,7 @@ class BeatSyncConfig(BasePipelineConfig):
         json_schema_extra=ui_field_config(order=40, label="Intensity"),
     )
     intensity_amount: float = Field(
-        default=0.5,
+        default=0.8,
         ge=0.0,
         le=1.0,
         description="Depth of brightness modulation.",
@@ -111,7 +109,7 @@ class BeatSyncConfig(BasePipelineConfig):
         json_schema_extra=ui_field_config(order=42, label="Blur"),
     )
     blur_amount: float = Field(
-        default=0.5,
+        default=0.7,
         ge=0.0,
         le=1.0,
         description="Depth of blur modulation.",
@@ -124,7 +122,7 @@ class BeatSyncConfig(BasePipelineConfig):
         json_schema_extra=ui_field_config(order=44, label="Invert"),
     )
     invert_amount: float = Field(
-        default=0.3,
+        default=0.5,
         ge=0.0,
         le=1.0,
         description="Depth of inversion modulation.",
@@ -137,7 +135,7 @@ class BeatSyncConfig(BasePipelineConfig):
         json_schema_extra=ui_field_config(order=46, label="Contrast"),
     )
     contrast_amount: float = Field(
-        default=0.5,
+        default=0.7,
         ge=0.0,
         le=1.0,
         description="Depth of contrast modulation.",

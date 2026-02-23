@@ -81,7 +81,7 @@ class BeatSyncPipeline(Pipeline):
 
         # --- Tap tempo --------------------------------------------------------
         tap = kwargs.get("tap", False)
-        bpm = kwargs.get("bpm", 120.0)
+        bpm = max(1.0, min(float(kwargs.get("bpm", 120.0)), 999.0))
         self.tap_tempo.update(tap, now)
         effective_bpm = self.tap_tempo.get_bpm(bpm, now)
 
@@ -100,11 +100,11 @@ class BeatSyncPipeline(Pipeline):
             "reset_phase": kwargs.get("reset_phase", False),
             # Effects
             "intensity_enabled": kwargs.get("intensity_enabled", True),
-            "intensity_amount": kwargs.get("intensity_amount", 0.5),
+            "intensity_amount": kwargs.get("intensity_amount", 0.8),
             "blur_enabled": kwargs.get("blur_enabled", False),
-            "blur_amount": kwargs.get("blur_amount", 0.5),
+            "blur_amount": kwargs.get("blur_amount", 0.7),
             "invert_enabled": kwargs.get("invert_enabled", False),
-            "invert_amount": kwargs.get("invert_amount", 0.3),
+            "invert_amount": kwargs.get("invert_amount", 0.5),
             "contrast_enabled": kwargs.get("contrast_enabled", False),
-            "contrast_amount": kwargs.get("contrast_amount", 0.5),
+            "contrast_amount": kwargs.get("contrast_amount", 0.7),
         }

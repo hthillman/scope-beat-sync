@@ -1,7 +1,7 @@
 [project]
 name = "scope-beat-sync"
-version = "0.1.0"
-description = "Beat-locked frame buffer for VJ latency compensation in Daydream Scope"
+version = "0.2.0"
+description = "Beat-reactive VACE conditioning preprocessor for Daydream Scope"
 requires-python = ">=3.12"
 
 [project.entry-points."scope"]

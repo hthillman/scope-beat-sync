@@ -9,20 +9,20 @@ class BeatSyncConfig(BasePipelineConfig):
     """Configuration for the Beat Sync preprocessor.
 
     Chains after a conditioning preprocessor (depth, edge, flow, etc.)
-    and modulates the conditioning frames based on BPM so the generated
-    output inherits beat-reactive visuals.
+    and forwards beat parameters to the main pipeline where modulation
+    is applied at VACE encode time for tight beat lock.
     """
 
     pipeline_id = "beat-sync"
     pipeline_name = "Beat Sync"
     pipeline_description = (
-        "Beat-reactive conditioning preprocessor. Modulates depth maps, "
-        "edges, or flow fields with BPM-synced effects so VACE output "
-        "pulses to the beat."
+        "Beat-reactive conditioning. Forwards BPM, curve, and effect "
+        "params to the VACE encoding block where modulation is applied "
+        "right before encoding for consistent beat-locked output."
     )
 
     supports_prompts = False
-    modified = True
+    modified = False  # frames pass through unmodified; modulation happens at VACE encode time
     usage = [UsageType.PREPROCESSOR]
 
     modes = {"video": ModeDefaults(default=True)}
@@ -144,6 +144,3 @@ class BeatSyncConfig(BasePipelineConfig):
         json_schema_extra=ui_field_config(order=47, label="Contrast Amount"),
     )
 
-    # NOTE: Mask pulse removed — preprocessors are called per-frame so
-    # they can't construct the full-chunk vace_input_masks tensor.
-    # Mask modulation would need to live in the main pipeline.
